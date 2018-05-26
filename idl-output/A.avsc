@@ -1,0 +1,62 @@
+{
+  "type" : "record",
+  "name" : "A",
+  "fields" : [ {
+    "name" : "an_integer",
+    "type" : "int"
+  }, {
+    "name" : "test_enum",
+    "type" : {
+      "type" : "enum",
+      "name" : "Asdf",
+      "symbols" : [ "Q", "W", "E", "R" ]
+    }
+  }, {
+    "name" : "an_array_of_integers",
+    "type" : {
+      "type" : "array",
+      "items" : "int"
+    }
+  }, {
+    "name" : "an_array_of_bs",
+    "type" : {
+      "type" : "array",
+      "items" : {
+        "type" : "record",
+        "name" : "B",
+        "fields" : [ {
+          "name" : "b_field",
+          "type" : {
+            "type" : "array",
+            "items" : "int"
+          }
+        } ]
+      }
+    }
+  }, {
+    "name" : "an_array_of_cs",
+    "type" : {
+      "type" : "array",
+      "items" : {
+        "type" : "record",
+        "name" : "C",
+        "fields" : [ {
+          "name" : "an_array_of_es",
+          "type" : {
+            "type" : "array",
+            "items" : {
+              "type" : "array",
+              "items" : "int"
+            }
+          }
+        }, {
+          "name" : "an_array_of_bs",
+          "type" : {
+            "type" : "array",
+            "items" : "B"
+          }
+        } ]
+      }
+    }
+  } ]
+}
