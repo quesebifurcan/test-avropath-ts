@@ -46,6 +46,9 @@ import qualified Data.Text as T
 arrayPrefix = "Array_"
 indentationOffset = 2
 
+decodeSchema :: FilePath -> IO (Either String Schema.Schema)
+decodeSchema p = Aeson.eitherDecode <$> LBS.readFile p
+
 data TsType
   = TsRecord TsRecordType
   | TsArray TsArrayType
@@ -114,9 +117,82 @@ instance TSFormat TsType where
   formatTs TsString = tsClass "TsString" emptyDoc
   formatTs TsFloat = tsClass "TsFloat" emptyDoc
 
+toMapName typeName = T.append (unTN typeName) "__map__"
 
-decodeSchema :: FilePath -> IO (Either String Schema.Schema)
-decodeSchema p = Aeson.eitherDecode <$> LBS.readFile p
+arrayifyKeys :: Schema.Type -> Maybe Schema.Type
+arrayifyKeys r@(Schema.Record typeName _ _ _ _ fields) =
+  Just r {
+  name = TN $ toMapName typeName
+  , fields = (fmap pluralizeField fields)
+  }
+  where
+    pluralizeField f@(Schema.Field _ _ _ _ fieldType _) =
+      f { fldType = Schema.Array fieldType }
+arrayifyKeys a@(Schema.Array _) = Just a
+arrayifyKeys _ = Nothing
+
+getTsTypeName :: TsType -> T.Text
+getTsTypeName (TsRecord (TsRecordType name _)) = name
+getTsTypeName (TsArray (TsArrayType name items)) =
+  T.append arrayPrefix (getTsTypeName items)
+getTsTypeName (TsUnion options) =
+  T.intercalate " | " (NE.toList $ NE.map getTsTypeName options)
+getTsTypeName (TsNamedType x) = x
+getTsTypeName (TsEnum (TsEnumType name _)) = name
+getTsTypeName x = T.pack $ show x
+
+getTsTypeSignature :: TsType -> Doc ann
+getTsTypeSignature (TsRecord (TsRecordType name _)) = pretty name
+getTsTypeSignature (TsArray (TsArrayType _ items)) =
+  "Array" <> "<" <> getTsTypeSignature items <> ">"
+getTsTypeSignature (TsUnion options) =
+  cat $ punctuate pipe options'
+  where
+    options' = NE.toList $ NE.map getTsTypeSignature options
+getTsTypeSignature (TsNamedType x) = pretty x
+getTsTypeSignature (TsEnum (TsEnumType name _)) = pretty name
+getTsTypeSignature TsString = "string"
+getTsTypeSignature TsInt = "number"
+
+avroToTypescript' :: [Type] -> ([TsType], [TsTypeState])
+avroToTypescript' xs = unzip $ fmap avroToTypescript xs
+
+avroToTypescript :: Type -> (TsType, TsTypeState)
+avroToTypescript (Schema.Record typeName _ _ _ _ fields) =
+  (result, update)
+  where
+    avroFieldTypes = fmap fldType fields
+    (tsFieldTypes, newTypes) = avroToTypescript' avroFieldTypes
+    recordFields =
+      zipWith TsRecordField (fmap fldName fields) tsFieldTypes
+    result = TsRecord $ TsRecordType (unTN typeName) recordFields
+    update = mconcat newTypes `mappend` TsTypeState (S.singleton result)
+avroToTypescript (Schema.Array items) =
+  (array, update)
+  where
+    update =
+      newTypes `mappend`
+      a `mappend`
+      TsTypeState (S.singleton array)
+    array = TsArray $ TsArrayType tsArrayName tsItemType
+    (tsItemType, a) = avroToTypescript items
+    tsArrayName = T.append arrayPrefix (getTsTypeName tsItemType)
+    newTypes =
+      case fmap avroToTypescript $ arrayifyKeys items of
+        Just (_, newTypes') -> newTypes' -- TODO: correct?
+        Nothing             -> mempty
+avroToTypescript (Schema.Enum name _ _ _ symbols _) =
+  (t, TsTypeState (S.singleton t))
+  where
+    t = TsEnum $ TsEnumType (unTN name) symbols
+avroToTypescript (Schema.NamedType x) =
+  (TsNamedType (unTN x), TsTypeState S.empty)
+avroToTypescript (Schema.Union _ _) = (TsPlaceholder "union", mempty)
+avroToTypescript Schema.Int = (TsInt, TsTypeState (S.singleton TsInt))
+avroToTypescript Schema.Double = (TsFloat, TsTypeState (S.singleton TsFloat))
+avroToTypescript Schema.Long = (TsInt, TsTypeState (S.singleton TsInt))
+avroToTypescript Schema.String = (TsString, TsTypeState (S.singleton TsString))
+avroToTypescript x = error $ show x
 
 newInstance (TsRecordField name fieldType) =
   pretty name <>
@@ -133,8 +209,10 @@ newInstance (TsRecordField name fieldType) =
   where
     fieldValue = getTsTypeName fieldType
 
+getter name = "get" <+> name <> lparen <> rparen
+
 recordAt r@(TsRecordType name fields) =
-  "get at" <+> lparen <> rparen <+> withBraces body
+  getter "at" <+> withBraces body
   where
     body = "return" <+> withBraces (vcat fieldsExpr)
     fieldsExpr = punctuate comma (fmap newInstance fields)
@@ -218,12 +296,9 @@ sliceMethod (TsArrayType name items) =
       semi
 
 mapMethod (TsArrayType _ (TsRecord (TsRecordType name fields))) =
-  "get map()" <+> withBraces body
+  getter "map" <+> withBraces body
   where
-    body =
-      "return" <+>
-      withBraces properties <>
-      semi
+    body = "return" <+> withBraces properties <> semi
       where
         properties =
           vcat $
@@ -248,80 +323,3 @@ mapMethod (TsArrayType _ (TsRecord (TsRecordType name fields))) =
           dot <>
           pretty fieldName
 mapMethod _ = emptyDoc
-
-toMapName typeName = T.append (unTN typeName) "__map__"
-
-arrayifyKeys :: Schema.Type -> Maybe Schema.Type
-arrayifyKeys r@(Schema.Record typeName _ _ _ _ fields) =
-  Just r {
-  name = TN $ toMapName typeName
-  , fields = (fmap pluralizeField fields)
-  }
-  where
-    pluralizeField f@(Schema.Field _ _ _ _ fieldType _) =
-      f { fldType = Schema.Array fieldType }
-arrayifyKeys a@(Schema.Array _) = Just a
-arrayifyKeys _ = Nothing
-
-getTsTypeName :: TsType -> T.Text
-getTsTypeName (TsRecord (TsRecordType name _)) = name
-getTsTypeName (TsArray (TsArrayType name items)) =
-  T.append arrayPrefix (getTsTypeName items)
-getTsTypeName (TsUnion options) =
-  T.intercalate " | " (NE.toList $ NE.map getTsTypeName options)
-getTsTypeName (TsNamedType x) = x
-getTsTypeName (TsEnum (TsEnumType name _)) = name
-getTsTypeName x = T.pack $ show x
-
-getTsTypeSignature :: TsType -> Doc ann
-getTsTypeSignature (TsRecord (TsRecordType name _)) = pretty name
-getTsTypeSignature (TsArray (TsArrayType _ items)) =
-  "Array" <> "<" <> getTsTypeSignature items <> ">"
-getTsTypeSignature (TsUnion options) =
-  cat $ punctuate pipe options'
-  where
-    options' = NE.toList $ NE.map getTsTypeSignature options
-getTsTypeSignature (TsNamedType x) = pretty x
-getTsTypeSignature (TsEnum (TsEnumType name _)) = pretty name
-getTsTypeSignature TsString = "string"
-getTsTypeSignature TsInt = "number"
-
-avroToTypescript' :: [Type] -> ([TsType], [TsTypeState])
-avroToTypescript' xs = unzip $ fmap avroToTypescript xs
-
-avroToTypescript :: Type -> (TsType, TsTypeState)
-avroToTypescript (Schema.Record typeName _ _ _ _ fields) =
-  (result, update)
-  where
-    avroFieldTypes = fmap fldType fields
-    (tsFieldTypes, newTypes) = avroToTypescript' avroFieldTypes
-    recordFields =
-      zipWith TsRecordField (fmap fldName fields) tsFieldTypes
-    result = TsRecord $ TsRecordType (unTN typeName) recordFields
-    update = mconcat newTypes `mappend` TsTypeState (S.singleton result)
-avroToTypescript (Schema.Array items) =
-  (array, update)
-  where
-    update =
-      newTypes `mappend`
-      a `mappend`
-      TsTypeState (S.singleton array)
-    array = TsArray $ TsArrayType tsArrayName tsItemType
-    (tsItemType, a) = avroToTypescript items
-    tsArrayName = T.append arrayPrefix (getTsTypeName tsItemType)
-    newTypes =
-      case fmap avroToTypescript $ arrayifyKeys items of
-        Just (_, newTypes') -> newTypes' -- TODO: correct?
-        Nothing             -> mempty
-avroToTypescript (Schema.Enum name _ _ _ symbols _) =
-  (t, TsTypeState (S.singleton t))
-  where
-    t = TsEnum $ TsEnumType (unTN name) symbols
-avroToTypescript (Schema.NamedType x) =
-  (TsNamedType (unTN x), TsTypeState S.empty)
-avroToTypescript (Schema.Union _ _) = (TsPlaceholder "union", mempty)
-avroToTypescript Schema.Int = (TsInt, TsTypeState (S.singleton TsInt))
-avroToTypescript Schema.Double = (TsFloat, TsTypeState (S.singleton TsFloat))
-avroToTypescript Schema.Long = (TsInt, TsTypeState (S.singleton TsInt))
-avroToTypescript Schema.String = (TsString, TsTypeState (S.singleton TsString))
-avroToTypescript x = error $ show x

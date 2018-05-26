@@ -11,6 +11,7 @@ import GHC.Generics
 
 -- import AvroPath (getTsTypeName, TsType(..))
 
+-- TODO: use avro types from lib?
 type Api = SpockM () () () ()
 
 type ApiAction a = SpockAction () () () a
@@ -28,9 +29,7 @@ main = do
 
 app :: Api
 app = do
-  get "test" $ do
-    json (Test 123)
-  post "test" $ do
+  post "/" $ do
     test <- jsonBody' :: ApiAction Test
     json (result test)
     where
