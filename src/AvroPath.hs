@@ -8,7 +8,6 @@ import Data.Avro.Schema
 import Data.List.NonEmpty (NonEmpty( (:|) ))
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Text
-import Text.Pretty.Simple (pPrint)
 import qualified Data.Aeson as Aeson
 import qualified Data.Avro.JSON as AJ
 import qualified Data.Avro.Schema as Schema

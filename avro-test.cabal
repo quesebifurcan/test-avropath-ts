@@ -26,8 +26,7 @@ executable avropath-print
                        pretty >= 1.1,
                        containers >= 0.5,
                        mtl >= 2.2,
-                       prettyprinter,
-                       pretty-simple
+                       prettyprinter
 
 executable avropath-serve
   hs-source-dirs:      src
@@ -45,4 +44,7 @@ executable avropath-serve
                        prettyprinter,
                        pretty-simple,
                        Spock,
-                       text
+                       text,
+                       generic-random,
+                       QuickCheck,
+                       quickcheck-instances
